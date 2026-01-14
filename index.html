@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>QR Code + Logo (PNG / SVG)</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial; padding: 24px; max-width: 980px; margin: 0 auto; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    @media (max-width: 900px){ .grid { grid-template-columns: 1fr; } }
+    .card { border: 1px solid #e3e3e3; border-radius: 14px; padding: 16px; }
+    label { display:block; font-size: 13px; margin: 10px 0 6px; color:#222; }
+    input, select, button, textarea { width: 100%; padding: 10px; font-size: 14px; box-sizing: border-box; }
+    textarea { height: 92px; }
+    .row { display:flex; gap: 10px; }
+    .row > * { flex: 1; }
+    .btnrow { display:flex; gap: 10px; margin-top: 14px; }
+    .btnrow button { cursor: pointer; }
+    .hint { font-size: 12px; color: #666; margin-top: 10px; line-height: 1.35; }
+    #previewWrap { display:flex; justify-content:center; align-items:center; min-height: 420px; border: 1px dashed #ddd; border-radius: 12px; padding: 14px; }
+    #status { margin-top: 10px; font-size: 12px; color:#444; }
+    .small { font-size: 12px; color:#666; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body>
+  <h1>QR Code Generator (PNG / SVG)</h1>
+  <p class="hint">
+    Client-side only (no server): your text and logo never leave your browser.
+  </p>
+
+  <div class="grid">
+    <div class="card">
+      <label>Content (URL or text)</label>
+      <textarea id="data" placeholder="https://prep-next.github.io/PREP-SHOT/"></textarea>
+
+      <div class="row">
+        <div>
+          <label>Error correction</label>
+          <select id="ecLevel">
+            <option value="L">L (7%)</option>
+            <option value="M">M (15%)</option>
+            <option value="Q">Q (25%)</option>
+            <option value="H" selected>H (30%) — recommended with logo</option>
+          </select>
+        </div>
+        <div>
+          <label>Quiet zone (border, in modules)</label>
+          <select id="border">
+            <option value="2">2</option>
+            <option value="4" selected>4</option>
+            <option value="6">6</option>
+            <option value="8">8</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>PNG resolution</label>
+          <select id="pngSize">
+            <option value="512">512 × 512</option>
+            <option value="1024" selected>1024 × 1024</option>
+            <option value="2048">2048 × 2048</option>
+            <option value="3072">3072 × 3072</option>
+            <option value="4096">4096 × 4096</option>
+          </select>
+          <div class="small">SVG is vector (resolution-independent).</div>
+        </div>
+        <div>
+          <label>Module size (SVG display scale)</label>
+          <select id="moduleSize">
+            <option value="6">6</option>
+            <option value="8" selected>8</option>
+            <option value="10">10</option>
+            <option value="12">12</option>
+          </select>
+          <div class="small">Controls how large the SVG appears.</div>
+        </div>
+      </div>
+
+      <div class="row">
+        <div>
+          <label>Logo (optional)</label>
+          <input id="logo" type="file" accept="image/*" />
+        </div>
+        <div>
+          <label>Logo ratio</label>
+          <input id="logoRatio" type="number" step="0.01" value="0.22" min="0" max="0.35" />
+          <div class="small">Recommended 0.18–0.28 if centered on QR data area.</div>
+        </div>
+      </div>
+
+      <label>Logo center reference</label>
+      <select id="centerMode">
+        <option value="canvas" selected>Canvas center (includes quiet zone) — stable</option>
+        <option value="qr">QR data area center (excludes quiet zone)</option>
+      </select>
+
+      <label>Logo pad (improves scan reliability)</label>
+      <select id="padStyle">
+        <option value="rounded" selected>White rounded pad (recommended)</option>
+        <option value="square">White square pad</option>
+        <option value="none">None</option>
+      </select>
+
+      <div class="btnrow">
+        <button id="generate">Generate / Update</button>
+        <button id="downloadPng">Download PNG</button>
+        <button id="downloadSvg">Download SVG</button>
+      </div>
+
+      <p class="hint">
+        If you choose “Canvas center”, increasing quiet zone won’t move the logo. If you choose “QR data area center”, the logo stays centered on the QR modules.
+      </p>
+    </div>
+
+    <div class="card">
+      <label>Preview (SVG)</label>
+      <div id="previewWrap">
+        <div id="preview"></div>
+      </div>
+      <div id="status" class="mono"></div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    let latestSvgString = "";
+    let latestLogoDataUrl = null;
+
+    function setStatus(msg){ $("status").textContent = msg; }
+
+    function readFileAsDataURL(file){
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function buildQrSvgString(data, ecLevel, border, cellSize){
+      const qr = qrcode(0, ecLevel);
+      qr.addData(data);
+      qr.make();
+
+      const moduleCount = qr.getModuleCount();
+      const totalModules = moduleCount + 2 * border;
+      const size = totalModules * cellSize;
+
+      const qrX = border * cellSize;
+      const qrY = border * cellSize;
+
+      let rects = "";
+      for (let r = 0; r < moduleCount; r++){
+        for (let c = 0; c < moduleCount; c++){
+          if (qr.isDark(r, c)){
+            const x = qrX + c * cellSize;
+            const y = qrY + r * cellSize;
+            rects += `<rect x="${x}" y="${y}" width="${cellSize}" height="${cellSize}" />`;
+          }
+        }
+      }
+
+      const svg =
+`<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+  <rect width="100%" height="100%" fill="#ffffff"/>
+  <g fill="#000000">${rects}</g>
+</svg>`;
+
+      return {
+        svg,
+        moduleCount,
+        border,
+        cellSize,
+        size,
+        qrX, qrY,
+        qrSize: moduleCount * cellSize
+      };
+    }
+
+    function insertLogo(svgString, logoDataUrl, ratio, padStyle, centerMode, size, qrX, qrY, qrSize){
+      if (!logoDataUrl || ratio <= 0) return svgString;
+
+      // logo size: keep it relative to QR data area by default (more meaningful)
+      const logoSize = Math.floor(qrSize * ratio);
+
+      // Pick which "center" you want
+      const centerX = (centerMode === "canvas") ? (size / 2) : (qrX + qrSize / 2);
+      const centerY = (centerMode === "canvas") ? (size / 2) : (qrY + qrSize / 2);
+
+      const x = Math.round(centerX - logoSize / 2);
+      const y = Math.round(centerY - logoSize / 2);
+
+      const pad = Math.floor(logoSize * 0.18);
+      const px = x - pad;
+      const py = y - pad;
+      const pw = logoSize + pad * 2;
+      const ph = logoSize + pad * 2;
+      const r = Math.floor(Math.min(pw, ph) * 0.12);
+
+      let padElem = "";
+      if (padStyle === "rounded") {
+        padElem = `<rect x="${px}" y="${py}" width="${pw}" height="${ph}" rx="${r}" ry="${r}" fill="#ffffff"/>`;
+      } else if (padStyle === "square") {
+        padElem = `<rect x="${px}" y="${py}" width="${pw}" height="${ph}" fill="#ffffff"/>`;
+      }
+
+      const logoElem =
+        `<image href="${logoDataUrl}" x="${x}" y="${y}" width="${logoSize}" height="${logoSize}" preserveAspectRatio="xMidYMid meet"/>`;
+
+      return svgString.replace(/<\/svg>\s*$/, `<g id="logo-layer">${padElem}${logoElem}</g></svg>`);
+    }
+
+    async function generate(){
+      const data = $("data").value.trim();
+      if (!data) { setStatus("Please enter content."); return; }
+
+      const ecLevel = $("ecLevel").value;
+      const border = parseInt($("border").value, 10);
+      const cellSize = parseInt($("moduleSize").value, 10);
+      const ratio = Math.min(Math.max(parseFloat($("logoRatio").value || "0"), 0), 0.35);
+      const padStyle = $("padStyle").value;
+      const centerMode = $("centerMode").value;
+
+      const logoFile = $("logo").files?.[0];
+      latestLogoDataUrl = logoFile ? await readFileAsDataURL(logoFile) : null;
+
+      const built = buildQrSvgString(data, ecLevel, border, cellSize);
+      let svg = built.svg;
+
+      svg = insertLogo(
+        svg,
+        latestLogoDataUrl,
+        ratio,
+        padStyle,
+        centerMode,
+        built.size,
+        built.qrX, built.qrY, built.qrSize
+      );
+
+      latestSvgString = svg;
+      $("preview").innerHTML = latestSvgString;
+
+      let msg = `Generated. centerMode=${centerMode}, modules=${built.moduleCount}, cell=${cellSize}px, border=${border}, canvas=${built.size}px`;
+      if (logoFile && ecLevel !== "H") msg += " | Tip: with logo, use H.";
+      setStatus(msg);
+    }
+
+    function downloadTextFile(filename, text){
+      const blob = new Blob([text], { type: "image/svg+xml;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function downloadSVG(){
+      if (!latestSvgString) await generate();
+      if (!latestSvgString) return;
+      downloadTextFile("qrcode.svg", latestSvgString);
+    }
+
+    async function downloadPNG(){
+      if (!latestSvgString) await generate();
+      if (!latestSvgString) return;
+
+      const sizePx = parseInt($("pngSize").value, 10);
+
+      const svgBlob = new Blob([latestSvgString], { type: "image/svg+xml;charset=utf-8" });
+      const svgUrl = URL.createObjectURL(svgBlob);
+
+      const img = new Image();
+      img.decoding = "async";
+
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+        img.src = svgUrl;
+      });
+
+      const canvas = document.createElement("canvas");
+      canvas.width = sizePx;
+      canvas.height = sizePx;
+      const ctx = canvas.getContext("2d");
+
+      ctx.clearRect(0, 0, sizePx, sizePx);
+      ctx.drawImage(img, 0, 0, sizePx, sizePx);
+
+      URL.revokeObjectURL(svgUrl);
+
+      const a = document.createElement("a");
+      a.download = "qrcode.png";
+      a.href = canvas.toDataURL("image/png");
+      a.click();
+    }
+
+    $("generate").addEventListener("click", generate);
+    $("downloadPng").addEventListener("click", downloadPNG);
+    $("downloadSvg").addEventListener("click", downloadSVG);
+
+    $("data").value = "https://www.google.com/";
+    generate();
+  </script>
+</body>
+</html>
