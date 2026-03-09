@@ -1,5 +1,7 @@
 # qr-logo-generator
 
+online tool: https://fietkau.software/qr
+
 ```python
 # copy from https://www.jianshu.com/p/c0073c6aa544
 
